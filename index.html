@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Squish Runner</title>
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; background:#1b1f27; color:#e6e6e6; margin:0; padding:24px; max-width:900px; }
+  h1 { font-size:20px; margin-bottom:4px; }
+  .subtitle { color:#9aa4b2; font-size:13px; margin-bottom:16px; }
+  .row { margin-bottom:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  select, input, button { font-size:14px; padding:6px 10px; border-radius:6px; border:1px solid #444; background:#262b36; color:#eee; }
+  button { background:#3a7afe; border:none; cursor:pointer; font-weight:600; }
+  button:disabled { background:#555; cursor:not-allowed; }
+  #console { background:#0e1117; border:1px solid #333; border-radius:8px; padding:12px; height:420px;
+             overflow-y:auto; white-space:pre-wrap; font-family:Consolas,monospace; font-size:13px; margin-top:16px; }
+  .status { margin-top:8px; font-size:13px; }
+  .pass { color:#5fd57a; } .fail { color:#ff6b6b; } .running { color:#ffd166; }
+  .warn { color:#ffd166; }
+  .agentBox { background:#262b36; border:1px solid #444; border-radius:8px; padding:12px; margin-bottom:16px; font-size:13px; }
+  code { background:#0e1117; padding:2px 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+  <h1>Squish Runner</h1>
+  <div class="subtitle">Runs squishrunner.exe on YOUR machine via a local agent — nothing executes on this website.</div>
+
+  <div class="agentBox" id="agentBox">Checking for local Squish Agent...</div>
+
+  <div class="row">
+    <label>Suite:</label>
+    <select id="suite" disabled></select>
+    <label>Format:</label>
+    <select id="format" disabled>
+      <option value="xml3">xml3</option>
+      <option value="junit">junit</option>
+      <option value="html">html</option>
+      <option value="text">text</option>
+    </select>
+    <button id="runBtn" onclick="runSuite()" disabled>Run</button>
+  </div>
+  <div class="status" id="status"></div>
+  <div id="console">Waiting for local agent...</div>
+
+<script>
+// Change this if your users run the agent on a non-default port.
+const AGENT_URL = "http://127.0.0.1:8765";
+
+async function checkAgent() {
+  const box = document.getElementById('agentBox');
+  try {
+    const res = await fetch(AGENT_URL + '/ping');
+    const data = await res.json();
+    box.innerHTML = 'Agent connected &rarr; squishrunner will connect to <code>' +
+                     data.remoteHost + ':' + data.remotePort + '</code>';
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('suite').disabled = false;
+    document.getElementById('format').disabled = false;
+    document.getElementById('console').textContent = 'Ready.';
+    loadSuites();
+  } catch (e) {
+    box.innerHTML = '<span class="warn">No local Squish Agent detected on ' + AGENT_URL + '.</span><br>' +
+      'Start it on your machine first: <code>.\\squish-agent.ps1 -RemoteHost &lt;server&gt; -RemotePort 4322</code><br>' +
+      'Then reload this page.';
+    setTimeout(checkAgent, 3000); // keep retrying quietly
+  }
+}
+
+async function loadSuites() {
+  const res = await fetch(AGENT_URL + '/suites');
+  const data = await res.json();
+  const sel = document.getElementById('suite');
+  sel.innerHTML = '';
+  data.suites.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    sel.appendChild(opt);
+  });
+}
+
+async function runSuite() {
+  const suite = document.getElementById('suite').value;
+  const format = document.getElementById('format').value;
+  if (!suite) { alert('No suite selected'); return; }
+
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('status').innerHTML = '<span class="running">Starting...</span>';
+  document.getElementById('console').textContent = '';
+
+  try {
+    const res = await fetch(AGENT_URL + '/run?suite=' + encodeURIComponent(suite) + '&format=' + encodeURIComponent(format), { method: 'POST' });
+    const data = await res.json();
+    if (!data.jobId) {
+      document.getElementById('status').innerHTML = '<span class="fail">Failed to start: ' + (data.error || 'unknown error') + '</span>';
+      document.getElementById('runBtn').disabled = false;
+      return;
+    }
+    pollStatus(data.jobId);
+  } catch (e) {
+    document.getElementById('status').innerHTML = '<span class="fail">Could not reach local agent: ' + e.message + '</span>';
+    document.getElementById('runBtn').disabled = false;
+  }
+}
+
+async function pollStatus(jobId) {
+  const res = await fetch(AGENT_URL + '/status?id=' + jobId);
+  const data = await res.json();
+  document.getElementById('console').textContent = data.log || '';
+  const consoleEl = document.getElementById('console');
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+
+  if (data.state === 'running') {
+    document.getElementById('status').innerHTML = '<span class="running">Running...</span>';
+    setTimeout(() => pollStatus(jobId), 1000);
+  } else {
+    document.getElementById('runBtn').disabled = false;
+    if (data.state === 'passed') {
+      document.getElementById('status').innerHTML = '<span class="pass">PASSED (exit code ' + data.exitCode + ')</span>';
+    } else {
+      document.getElementById('status').innerHTML = '<span class="fail">FAILED (exit code ' + data.exitCode + ')</span>';
+    }
+  }
+}
+
+checkAgent();
+</script>
+</body>
+</html>
